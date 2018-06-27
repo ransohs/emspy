@@ -353,27 +353,13 @@ class FltQuery(Query):
 			return df
 
 		# Do the dirty work of casting a right type for each column of the data
-		# Note
-		# ====
-		# Runway IDs are discrete data but their key-value mapping is not provided
-		# because the mapping itself is quite big in size (45K entries). That means
-		# the regular routines to handle the discrete data won't work. As a result
-		# the discrete data routine has a dirty, custom routine particularly for
-		# the runway IDs. What it basically does is to send a separate but redundant
-		# query for runway IDs with "queryset$format = display", and then push the
-		# this query result at the runway ID column of the original query result.
-		# I know this is crappy but it seems the best way I could find.
+		
 		for i, cid, cname, ctype in zip(range(len(col)), col_id, col, coltypes):
 			try:
 				if ctype=='number':				
 					df.iloc[:, i] = pd.to_numeric(df.iloc[:, i])
 				elif ctype=='discrete':
 					df.iloc[:, i] = self.__key_to_val(df.iloc[:, i], cid)
-					# k_map = self.__flight.list_allvalues(field_id = cid, in_dict = True)
-					# if len(k_map) == 0:
-					# 	df[cname] = self.__get_rwy_id(cname)
-					# else:
-					# 	df = df.replace({cname: k_map})
 				elif ctype=='boolean':
 					df.iloc[:, i] = df.iloc[:, i].astype(bool)
 				elif ctype=='dateTime':
@@ -384,26 +370,48 @@ class FltQuery(Query):
 		return df
 
 
-	def __key_to_val(self, ds, field_id):
+	def __key_to_val(self, keys, field_id):
 		
 		k_map = self.__flight.list_allvalues(field_id = field_id, in_df = True)
 		
 		# Sometimes k_map is a very large table making "replace" operation 
 		# very slow. Just grap kv-maps subset that are present in the target 
 		# dataframe
-		k_map = k_map[k_map.key.isin(ds.unique())]
+		unique_keys  = keys.unique() # Unique integer keys in the data
+		k_map_subset = k_map[k_map.key.isin(unique_keys)]
+		
+		# If # of unique integer keys > matching rows of key-value maps, that
+		# means your data has some integer keys whose values are not in the meta-
+		# data, which also means your kvmaps in the meta data is out-dated.
+		# So update the kvmap.
+		if len(unique_keys) > k_map_subset.shape[0]:
+			# Delete and recreate the kvmaps for this field ID
+			self.__flight._trees['kvmaps'].drop(index = k_map.index, inplace=True)
+			k_map = self.__flight.list_allvalues(field_id = field_id, in_df = True)
+			k_map_subset = k_map[k_map.key.isin(unique_keys)]
+		
 		# Change k_map in dict
 		km_dict = dict()
 		for i, r in k_map.iterrows():
 			km_dict[r['key']] = r['value']
-		ds = ds.replace(km_dict)
+			
+		vals = keys.replace(km_dict)
 		
-		return ds
+		return vals
 		
 		
 	def __get_rwy_id(self, cname):
 		'''
 		Deprecated
+		
+		Runway IDs are discrete data but their key-value mapping is not provided
+		because the mapping itself is quite big in size (45K entries). That means
+		the regular routines to handle the discrete data won't work. As a result
+		the discrete data routine has a dirty, custom routine particularly for
+		the runway IDs. What it basically does is to send a separate but redundant
+		query for runway IDs with "queryset$format = display", and then push the
+		this query result at the runway ID column of the original query result.
+		I know this is crappy but it seems the best way I could find.
 		'''
 
 		print("\n --Running a special routine for querying runway IDs. This will make the querying twice longer.")
